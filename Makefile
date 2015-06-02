@@ -1,7 +1,7 @@
 ifneq ($(KERNELRELEASE),)
 # kbuild part
 
-obj-m := hid-gcore.o hid-gfb.o hid-g110.o hid-g13.o hid-g15.o hid-g15v2.o hid-g19.o 
+obj-m := hid-gcore.o hid-gfb.o hid-g110.o hid-g13.o hid-g15.o hid-g15v2.o hid-g19.o hid-g510.o
 
 else
 # development build
