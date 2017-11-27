@@ -54,8 +54,11 @@ EXPORT_SYMBOL_GPL(gcore_alloc_data);
 
 void gcore_free_data(struct gcore_data *gdata)
 {
+  if (gdata != NULL){
 	kfree(gdata->name);
 	kfree(gdata);
+	gdata = NULL;
+  }
 }
 EXPORT_SYMBOL_GPL(gcore_free_data);
 
@@ -108,10 +111,13 @@ EXPORT_SYMBOL_GPL(gcore_hid_open);
 
 void gcore_hid_close(struct gcore_data *gdata)
 {
-	struct hid_device *hdev = gdata->hdev;
+  struct hid_device *hdev = NULL;
 
-	hdev->ll_driver->close(hdev);
-	hid_hw_stop(hdev);
+  if (gdata != NULL){
+    hdev = gdata->hdev;
+    hdev->ll_driver->close(hdev);
+    hid_hw_stop(hdev);
+  }
 }
 EXPORT_SYMBOL_GPL(gcore_hid_close);
 
@@ -216,8 +222,11 @@ EXPORT_SYMBOL_GPL(gcore_input_report_key);
 
 void gcore_input_remove(struct gcore_data *gdata)
 {
+  if (gdata != NULL){
 	input_unregister_device(gdata->input_dev);
 	kfree(gdata->input_dev->keycode);
+	gdata->input_dev->keycode = NULL;
+  }
 }
 EXPORT_SYMBOL_GPL(gcore_input_remove);
 
@@ -310,12 +319,15 @@ void gcore_leds_remove(struct gcore_data *gdata)
 {
 	int i;
 
-	for (i = 0; i < gdata->led_count; i++) {
+	if (gdata != NULL){
+	  for (i = 0; i < gdata->led_count; i++) {
 		led_classdev_unregister(gdata->led_cdev[i]);
 		kfree(gdata->led_cdev[i]->name);
 		kfree(gdata->led_cdev[i]);
+	  }
+	  kfree(gdata->led_cdev);
+	  gdata->led_cdev = NULL;
 	}
-	kfree(gdata->led_cdev);
 }
 EXPORT_SYMBOL_GPL(gcore_leds_remove);
 

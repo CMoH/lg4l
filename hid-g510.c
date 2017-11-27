@@ -55,9 +55,6 @@
 #define G510_LED_BL_G 5
 #define G510_LED_BL_B 6
 
-#define G510_REPORT_4_INIT	0x00
-#define G510_REPORT_4_FINALIZE	0x01
-
 #define G510_READY_SUBSTAGE_1 0x01
 #define G510_READY_SUBSTAGE_2 0x02
 #define G510_READY_SUBSTAGE_3 0x04
@@ -76,11 +73,20 @@
 /* Per device data structure */
 struct g510_data {
 	/* HID reports */
-	struct hid_report *backlight_report;
+  	struct hid_report *backlight_report;
 	struct hid_report *start_input_report;
-	struct hid_report *feature_report_4;
+	struct hid_report *feature_report_0;
+	struct hid_report *feature_report_1;
+	struct hid_report *feature_report_3;
+	struct hid_report *feature_report_6;
+	struct hid_report *feature_report_7;
+	struct hid_report *feature_report_8;
+	struct hid_report *feature_report_9;
+	struct hid_report *feature_report_80;
 	struct hid_report *led_report;
-	struct hid_report *output_report_3;
+	struct hid_report *output_report_0;
+  	struct hid_report *output_report_3;
+	struct hid_report *output_report_FE;
 
 	/* core state */
 	u8 backlight_rgb[3];		/* keyboard illumination */
@@ -137,13 +143,12 @@ static const unsigned int g510_default_keymap[G510_KEYS] = {
 	KEY_UNKNOWN
 };
 
-static void g510_led_send(struct hid_device *hdev, u8 msg, u8 value1, u8 value2)
+static void g510_led_send(struct hid_device *hdev, u8 msg, u8 value)
 {
 	struct g510_data *g510data = hid_get_g510data(hdev);
 
-	g510data->led_report->field[0]->value[0] = msg;
-	g510data->led_report->field[0]->value[1] = value1;
-	g510data->led_report->field[0]->value[2] = value2;
+	g510data->led_report->field[0]->value[1] = msg;
+	g510data->led_report->field[0]->value[0] = value;
 
 	hid_hw_request(hdev, g510data->led_report, HID_REQ_SET_REPORT);
 }
@@ -152,7 +157,7 @@ static void g510_led_mbtns_send(struct hid_device *hdev)
 {
 	struct g510_data *g510data = hid_get_g510data(hdev);
 
-	g510_led_send(hdev, 4, ~g510data->led_mbtns, 0);
+	g510_led_send(hdev, 0x04, g510data->led_mbtns);
 }
 
 static void g510_led_mbtns_brightness_set(struct led_classdev *led_cdev,
@@ -161,21 +166,20 @@ static void g510_led_mbtns_brightness_set(struct led_classdev *led_cdev,
 	struct hid_device *hdev = gcore_led_classdev_to_hdev(led_cdev);
 	struct gcore_data *gdata = hid_get_gdata(hdev);
 	struct g510_data *g510data = gdata->data;
-	u8 mask = 0;
-
+	int led_nr = 0;
+	
 	if (led_cdev == gdata->led_cdev[G510_LED_M1])
-		value = g510data->led_mbtns & 0x01;
+	  led_nr = 3;
 	else if (led_cdev == gdata->led_cdev[G510_LED_M2])
-		value = g510data->led_mbtns & 0x02;
+	  led_nr = 2;	
 	else if (led_cdev == gdata->led_cdev[G510_LED_M3])
-		value = g510data->led_mbtns & 0x04;
-	else if (led_cdev == gdata->led_cdev[G510_LED_MR])
-		value = g510data->led_mbtns & 0x08;
-
-	if (mask && value)
-		g510data->led_mbtns |= mask;
+	  led_nr = 1;	
+	/* if it is not M1, M2 or M3 then it is MR */
+	
+	if (value == LED_OFF)
+	  g510data->led_mbtns &= ~(1 << (led_nr + 4));
 	else
-		g510data->led_mbtns &= ~mask;
+	  g510data->led_mbtns |= 1 << (led_nr+4);
 
 	g510_led_mbtns_send(hdev);
 }
@@ -183,26 +187,22 @@ static void g510_led_mbtns_brightness_set(struct led_classdev *led_cdev,
 static enum led_brightness
 g510_led_mbtns_brightness_get(struct led_classdev *led_cdev)
 {
-	struct hid_device *hdev = gcore_led_classdev_to_hdev(led_cdev);
+        struct hid_device *hdev = gcore_led_classdev_to_hdev(led_cdev);
 	struct gcore_data *gdata = hid_get_gdata(hdev);
 	struct g510_data *g510data = gdata->data;
-	int value = 0;
-
+	int led_nr = 0;
+	
 	if (led_cdev == gdata->led_cdev[G510_LED_M1])
-		value = g510data->led_mbtns & 0x01;
+	  led_nr = 3;
 	else if (led_cdev == gdata->led_cdev[G510_LED_M2])
-		value = g510data->led_mbtns & 0x02;
+	  led_nr = 2;	
 	else if (led_cdev == gdata->led_cdev[G510_LED_M3])
-		value = g510data->led_mbtns & 0x04;
-	else if (led_cdev == gdata->led_cdev[G510_LED_MR])
-		value = g510data->led_mbtns & 0x08;
-	else
-		dev_err(&hdev->dev,
-			G510_NAME " error retrieving LED brightness\n");
+	  led_nr = 1;	
+	/* if it is not M1, M2 or M3 then it is MR */
 
-	if (value)
-		return LED_FULL;
-	return LED_OFF;
+	return g510data->led_mbtns & (1 << (led_nr + 4))
+	  ? LED_FULL
+	  : LED_OFF;
 }
 
 
@@ -215,7 +215,7 @@ static void g510_led_bl_send(struct hid_device *hdev)
 	field0->value[0] = g510data->backlight_rgb[0];
 	field0->value[1] = g510data->backlight_rgb[1];
 	field0->value[2] = g510data->backlight_rgb[2];
-	field0->value[3] = 0x00;
+	field0->value[3] = 0x05;
 
 	hid_hw_request(hdev, g510data->backlight_report, HID_REQ_SET_REPORT);
 }
@@ -360,45 +360,11 @@ static int g510_raw_event(struct hid_device *hdev,
 	* On initialization receive a 258 byte message with
 	* data = 6 0 255 255 255 255 255 255 255 255 ...
 	*/
-	unsigned long irq_flags;
+	//unsigned long irq_flags;
 	struct gcore_data *gdata = dev_get_gdata(&hdev->dev);
-	struct g510_data *g510data = gdata->data;
+	//	struct g510_data *g510data = gdata->data;
 
-	spin_lock_irqsave(&gdata->lock, irq_flags);
-
-	if (unlikely(g510data->ready_stages != G510_READY_STAGE_3)) {
-		switch (report->id) {
-		case 6:
-			if (!(g510data->ready_stages & G510_READY_SUBSTAGE_1))
-				g510data->ready_stages |= G510_READY_SUBSTAGE_1;
-			else if (g510data->ready_stages & G510_READY_SUBSTAGE_4 &&
-				 !(g510data->ready_stages & G510_READY_SUBSTAGE_5)
-				)
-				g510data->ready_stages |= G510_READY_SUBSTAGE_5;
-			else if (g510data->ready_stages & G510_READY_SUBSTAGE_6 &&
-				 raw_data[1] >= 0x80)
-				g510data->ready_stages |= G510_READY_SUBSTAGE_7;
-			break;
-		case 1:
-			if (!(g510data->ready_stages & G510_READY_SUBSTAGE_2))
-				g510data->ready_stages |= G510_READY_SUBSTAGE_2;
-			else
-				g510data->ready_stages |= G510_READY_SUBSTAGE_3;
-			break;
-		}
-
-		if (g510data->ready_stages == G510_READY_STAGE_1 ||
-		    g510data->ready_stages == G510_READY_STAGE_2 ||
-		    g510data->ready_stages == G510_READY_STAGE_3)
-			complete_all(&g510data->ready);
-
-		spin_unlock_irqrestore(&gdata->lock, irq_flags);
-		return 1;
-	}
-
-	spin_unlock_irqrestore(&gdata->lock, irq_flags);
-
-	if (likely(report->id == 2)) {
+	if (likely(report->id == 3)) {
 		g510_raw_event_process_input(hdev, gdata, raw_data);
 		return 1;
 	}
@@ -430,27 +396,6 @@ static int g510_reset_resume(struct hid_device *hdev)
 
 /***** probe-related functions *****/
 
-static void g510_feature_report_4_send(struct hid_device *hdev, int which)
-{
-	struct g510_data *g510data = hid_get_g510data(hdev);
-
-	if (which == G510_REPORT_4_INIT) {
-		g510data->feature_report_4->field[0]->value[0] = 0x02;
-		g510data->feature_report_4->field[0]->value[1] = 0x00;
-		g510data->feature_report_4->field[0]->value[2] = 0x00;
-		g510data->feature_report_4->field[0]->value[3] = 0x00;
-	} else if (which == G510_REPORT_4_FINALIZE) {
-		g510data->feature_report_4->field[0]->value[0] = 0x02;
-		g510data->feature_report_4->field[0]->value[1] = 0x80;
-		g510data->feature_report_4->field[0]->value[2] = 0x00;
-		g510data->feature_report_4->field[0]->value[3] = 0xFF;
-	} else {
-		return;
-	}
-
-	hid_hw_request(hdev, g510data->feature_report_4, HID_REQ_SET_REPORT);
-}
-
 static int read_feature_reports(struct gcore_data *gdata)
 {
 	struct hid_device *hdev = gdata->hdev;
@@ -470,17 +415,33 @@ static int read_feature_reports(struct gcore_data *gdata)
 
 	list_for_each_entry(report, feature_report_list, list) {
 		switch (report->id) {
+		case 0x01:
+			g510data->feature_report_1 = report;
+			break;
+		case 0x03:
+			g510data->feature_report_3 = report;
+			break;
 		case 0x04:
-			g510data->feature_report_4 = report;
-			break;
-		case 0x02:
 			g510data->led_report = report;
-			break;
-		case 0x06:
-			g510data->start_input_report = report;
 			break;
 		case 0x05:
 			g510data->backlight_report = report;
+			break;
+		case 0x06:
+			g510data->feature_report_6 = report;
+			break;
+		case 0x07:
+			g510data->feature_report_7 = report;
+			break;
+		case 0x08:
+			g510data->feature_report_8 = report;
+			break;
+		case 0x09:
+			g510data->feature_report_9 = report;
+			break;
+			
+		case 0x80:
+			g510data->feature_report_80 = report;
 			break;
 		default:
 			break;
@@ -513,6 +474,9 @@ static int read_feature_reports(struct gcore_data *gdata)
 		case 0x03:
 			g510data->output_report_3 = report;
 			break;
+		case 0xFE:
+			g510data->output_report_FE = report;
+			break;
 		}
 	}
 
@@ -521,81 +485,126 @@ static int read_feature_reports(struct gcore_data *gdata)
 	return 0;
 }
 
-static void wait_ready(struct gcore_data *gdata)
+static void g510_get_report8(struct hid_device *hdev, struct hid_report *report)
 {
-	struct g510_data *g510data = gdata->data;
-	struct hid_device *hdev = gdata->hdev;
-	unsigned long irq_flags;
+  //struct mt_device *td = hid_get_drvdata(hdev);
+	int ret, size = hid_report_len(report);
+	u8 *buf;
 
-	dbg_hid("Waiting for G510 to activate\n");
+	buf = hid_alloc_report_buf(report, GFP_KERNEL);
+	if (!buf)
+		return;
 
-	/*
-	 * Wait here for stage 1 (substages 1-3) to complete
-	 */
-	wait_for_completion_timeout(&g510data->ready, HZ);
-
-	/* Protect data->ready_stages */
-	spin_lock_irqsave(&gdata->lock, irq_flags);
-	if (g510data->ready_stages != G510_READY_STAGE_1) {
-		dev_warn(&hdev->dev,
-			 "%s hasn't completed stage 1 yet, forging ahead with initialization\n",
-			gdata->name);
-		/* Force the stage */
-		g510data->ready_stages = G510_READY_STAGE_1;
+	ret = hid_hw_raw_request(hdev, report->id, buf, size,
+				 HID_FEATURE_REPORT, HID_REQ_GET_REPORT);
+	if (ret < 0) {
+		dev_warn(&hdev->dev, "failed to fetch feature %d\n",
+			 report->id);
+	} else {
+		ret = hid_report_raw_event(hdev, HID_FEATURE_REPORT, buf,
+					   size, 0);
+		if (ret)
+			dev_warn(&hdev->dev, "failed to report feature\n");
 	}
-	init_completion(&g510data->ready);
-	g510data->ready_stages |= G510_READY_SUBSTAGE_4;
-	spin_unlock_irqrestore(&gdata->lock, irq_flags);
 
-	/*
-	 * Send the init report, then follow with the input report to trigger
-	 * report 6 and wait for us to get a response.
-	 */
-	g510_feature_report_4_send(hdev, G510_REPORT_4_INIT);
-	hid_hw_request(hdev, g510data->start_input_report, HID_REQ_GET_REPORT);
-	wait_for_completion_timeout(&g510data->ready, HZ);
-
-	/* Protect data->ready_stages */
-	spin_lock_irqsave(&gdata->lock, irq_flags);
-	if (g510data->ready_stages != G510_READY_STAGE_2) {
-		dev_warn(&hdev->dev,
-			 "%s hasn't completed stage 2 yet, forging ahead with initialization\n",
-			gdata->name);
-		/* Force the stage */
-		g510data->ready_stages = G510_READY_STAGE_2;
-	}
-	init_completion(&g510data->ready);
-	g510data->ready_stages |= G510_READY_SUBSTAGE_6;
-	spin_unlock_irqrestore(&gdata->lock, irq_flags);
+	kfree(buf);
 }
 
-static void send_finalize_report(struct gcore_data *gdata)
+static void wait_ready(struct gcore_data *gdata)
 {
-	struct g510_data *g510data = gdata->data;
+         struct g510_data *g510data = gdata->data;
 	struct hid_device *hdev = gdata->hdev;
-	unsigned long irq_flags;
+	//unsigned long irq_flags;
+
+	dbg_hid("Waiting for G510 to activate\n");
+	
+	/*
+	  host->keyb (2.1.0) ---> urb control, bmRequestType: 0x21, bRequest: 9, wValue: 0x0301, wIndex: 1, wLength: 19    (Report ID: 1, Feature)
+	  DATA: 01 00 00 
+	        00 00 00 00 00 00 00 00
+   	        00 00 00 00 00 00 00 00
+	*/
+	g510data->feature_report_1->field[0]->value[0] = 0x01;
+	g510data->feature_report_1->field[0]->value[1] = 0x00;
+	g510data->feature_report_1->field[0]->value[2] = 0x00;
+	g510data->feature_report_1->field[0]->value[3] = 0x00;
+	g510data->feature_report_1->field[0]->value[4] = 0x00;
+	g510data->feature_report_1->field[0]->value[5] = 0x00;
+	g510data->feature_report_1->field[0]->value[6] = 0x00;
+	g510data->feature_report_1->field[0]->value[7] = 0x00;
+	g510data->feature_report_1->field[0]->value[8] = 0x00;
+	g510data->feature_report_1->field[0]->value[9] = 0x00;
+	g510data->feature_report_1->field[0]->value[10] = 0x00;
+	g510data->feature_report_1->field[0]->value[11] = 0x00;
+	g510data->feature_report_1->field[0]->value[12] = 0x00;
+	g510data->feature_report_1->field[0]->value[13] = 0x00;
+	g510data->feature_report_1->field[0]->value[14] = 0x00;
+	g510data->feature_report_1->field[0]->value[15] = 0x00;
+	g510data->feature_report_1->field[0]->value[16] = 0x00;
+	g510data->feature_report_1->field[0]->value[17] = 0x00;
+	g510data->feature_report_1->field[0]->value[18] = 0x00;
+
+
+	hid_hw_request(hdev, g510data->feature_report_1, HID_REQ_SET_REPORT);		
 
 	/*
-	 * Send the finalize report, then follow with the input report to
-	 * trigger report 6 and wait for us to get a response.
+	 * Clear the LEDs
 	 */
-	g510_feature_report_4_send(hdev, G510_REPORT_4_FINALIZE);
-	hid_hw_request(hdev, g510data->start_input_report, HID_REQ_GET_REPORT);
-	hid_hw_request(hdev, g510data->start_input_report, HID_REQ_GET_REPORT);
-	wait_for_completion_timeout(&g510data->ready, HZ);
+	g510data->backlight_rgb[0] = G510_DEFAULT_RED;
+	g510data->backlight_rgb[1] = G510_DEFAULT_GREEN;
+	g510data->backlight_rgb[2] = G510_DEFAULT_BLUE;
+	g510_led_bl_send(hdev);
 
-	/* Protect data->ready_stages */
-	spin_lock_irqsave(&gdata->lock, irq_flags);
+	/* set M1 key */
+	g510data->led_mbtns = 0x80;
+	g510_led_mbtns_send(hdev);
 
-	if (g510data->ready_stages != G510_READY_STAGE_3) {
-		dev_warn(&hdev->dev, G510_NAME " hasn't completed stage 3 yet, forging ahead with initialization\n");
-		/* Force the stage */
-		g510data->ready_stages = G510_READY_STAGE_3;
-	} else {
-		dbg_hid(G510_NAME " stage 3 complete\n");
-	}
+	/*
+	  host->keyb (2.1.0) ---> urb control, bmRequestType: 0x21, bRequest: 9, wValue: 0x0301, wIndex: 1, wLength: 19    (Report ID: 1, Feature)
+	  DATA: 01 00 00 
+	        00 00 00 00 00 00 00 00
+   	        00 00 00 00 00 00 00 00
+	*/
+        g510data->feature_report_1->field[0]->value[0] = 0x01;
+        g510data->feature_report_1->field[0]->value[1] = 0x00;
+        g510data->feature_report_1->field[0]->value[2] = 0x00;
+        g510data->feature_report_1->field[0]->value[3] = 0x00;
+        g510data->feature_report_1->field[0]->value[4] = 0x00;
+        g510data->feature_report_1->field[0]->value[5] = 0x00;
+        g510data->feature_report_1->field[0]->value[6] = 0x00;
+        g510data->feature_report_1->field[0]->value[7] = 0x00;
+        g510data->feature_report_1->field[0]->value[8] = 0x00;
+        g510data->feature_report_1->field[0]->value[9] = 0x00;
+        g510data->feature_report_1->field[0]->value[10] = 0x00;
+        g510data->feature_report_1->field[0]->value[11] = 0x00;
+        g510data->feature_report_1->field[0]->value[12] = 0x00;
+        g510data->feature_report_1->field[0]->value[13] = 0x00;
+        g510data->feature_report_1->field[0]->value[14] = 0x00;
+        g510data->feature_report_1->field[0]->value[15] = 0x00;
+        g510data->feature_report_1->field[0]->value[16] = 0x00;
+        g510data->feature_report_1->field[0]->value[17] = 0x00;
+        g510data->feature_report_1->field[0]->value[18] = 0x00;
 
-	spin_unlock_irqrestore(&gdata->lock, irq_flags);
+	hid_hw_request(hdev, g510data->feature_report_1, HID_REQ_SET_REPORT);
+
+	/*
+	  host->keyb (2.1.0) ---> urb control, bmRequestType: 0x21, bRequest: 9, wValue: 0x0309, wIndex: 1, wLength: 8    (Report ID: 9, Feature)
+	  DATA: 09 02 00 00 00 00 00 00
+	*/
+	g510data->feature_report_9->field[0]->value[0] = 0x09;
+	g510data->feature_report_9->field[0]->value[1] = 0x02;
+	g510data->feature_report_9->field[0]->value[2] = 0x00;
+	g510data->feature_report_9->field[0]->value[3] = 0x00;
+	g510data->feature_report_9->field[0]->value[4] = 0x00;
+	g510data->feature_report_9->field[0]->value[5] = 0x00;
+	g510data->feature_report_9->field[0]->value[6] = 0x00;
+	g510data->feature_report_9->field[0]->value[7] = 0x00;
+
+        hid_hw_request(hdev, g510data->feature_report_9, HID_REQ_SET_REPORT);
+
+	/* Now the keyboard will transfer its memory to the host */
+	g510_get_report8(hdev, g510data->feature_report_8);
+	
 }
 
 static int g510_probe(struct hid_device *hdev,
@@ -622,7 +631,6 @@ static int g510_probe(struct hid_device *hdev,
 		goto err_cleanup_gdata;
 	}
 	gdata->data = g510data;
-	init_completion(&g510data->ready);
 
 	error = gcore_hid_open(gdata);
 	if (error) {
@@ -670,18 +678,6 @@ static int g510_probe(struct hid_device *hdev,
 
 	wait_ready(gdata);
 
-	/*
-	 * Clear the LEDs
-	 */
-	g510data->backlight_rgb[0] = G510_DEFAULT_RED;
-	g510data->backlight_rgb[1] = G510_DEFAULT_GREEN;
-	g510data->backlight_rgb[2] = G510_DEFAULT_BLUE;
-
-	g510_led_mbtns_send(hdev);
-	g510_led_bl_send(hdev);
-
-	send_finalize_report(gdata);
-
 	dbg_hid("G510 activated and initialized\n");
 
 	/* Everything went well */
@@ -714,11 +710,13 @@ err_no_cleanup:
 static void g510_remove(struct hid_device *hdev)
 {
 	struct gcore_data *gdata = hid_get_drvdata(hdev);
-	struct g510_data *g510data = gdata->data;
+	struct g510_data *g510data = NULL;
+
+	if (gdata != NULL) g510data = gdata->data;
 
 	sysfs_remove_group(&(hdev->dev.kobj), &g510_attr_group);
 
-	gfb_remove(gdata->gfb_data);
+	if (gdata != NULL) gfb_remove(gdata->gfb_data);
 
 	gcore_leds_remove(gdata);
 	gcore_input_remove(gdata);
@@ -764,4 +762,5 @@ module_exit(g510_exit);
 MODULE_DESCRIPTION("Logitech G510 HID Driver");
 MODULE_AUTHOR("Alistair Buxton (a.j.buxton@gmail.com)");
 MODULE_AUTHOR("Ciubotariu Ciprian (cheepeero@gmx.net)");
+MODULE_AUTHOR("Carlos Guidugli (guidugli@gmail.com)");
 MODULE_LICENSE("GPL");
